@@ -1,0 +1,15 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+env = ".env"
+
+remappings= [
+    
+]
+
+[rpc_endpoints]
+base-sepolia-rpc = "${RPC_URL}"
+
+[etherscan]
+base-sepolia = { key = "${ETHERSCAN_API_KEY}", url = "https://api.etherscan.io/v2/api?chainid=84532" }
