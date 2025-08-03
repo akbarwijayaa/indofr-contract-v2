@@ -16,7 +16,7 @@ contract Market is Ownable {
     address public rewardAddress;
 
     mapping(address => lockInfo[]) public userPositions;
-    mapping(address => mapping(uint256 => uint256)) public lockStartTime; // Track when each position was created
+    mapping(address => mapping(uint256 => uint256)) public lockStartTime;
 
 
     event Deposit(address indexed to, uint256 amount);
@@ -31,13 +31,12 @@ contract Market is Ownable {
     error InsufficientBalance();
     error StillLockedPeriod();
     error ZeroAmount();
-
     error AlreadyWithdrawn();
-
     error InvalidMarketAddress();
     error InvalidAmount();
     error MarketNotMatured();
     error InvalidClaimedStatus();
+    error Unauthorized();
 
     constructor (
         string memory _marketName,
@@ -189,7 +188,5 @@ contract Market is Ownable {
         position.claimed = true;
         position.claimedReward += claimedAmount;
     }
-
-    error Unauthorized();
 
 }
