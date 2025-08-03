@@ -3,39 +3,59 @@ pragma solidity ^0.8.30;
 
 import {Test, console} from "forge-std/Test.sol";
 import { Market } from "../src/Market.sol";
+import { Reward } from "../src/Reward.sol";
 import { MockUSDT } from "../src/mocks/MockUSDT.sol";
-
+import { lockInfo } from "../src/types/StructType.sol";
 
 contract MarketTest is Test {
     Market public market;
+    Reward public reward;
     MockUSDT public usdt;
-
-    struct lockInfo {
-        uint256 amount;
-        uint256 lockPeriod;
-        bool withdrawn;
-        bool claimed;
-    }
+    MockUSDT public otherToken;
 
     address public owner = address(0x123);
     address public alice = address(0x1);
     address public bob = address(0x2);
+    address public charlie = address(0x3);
+    address public attacker = address(0x666);
 
-    error MaxSupplyExceeded(uint256 maxSupply, uint256 attempted);
+    uint256 constant INITIAL_BALANCE = 10_000_000;
+    uint256 constant MAX_SUPPLY = 1_000_000;
+    uint256 constant THIRTY_DAYS = 30 days;
+    uint256 constant SIXTY_DAYS = 60 days;
+    uint256 constant NINETY_DAYS = 90 days;
+
+    event Deposit(address indexed to, uint256 amount);
+    event Redeem(address indexed to, uint256 amount);
+    event DepositAsOwner(uint256 amount);
+    event WithdrawToOwner(address indexed from, address indexed to, uint256 amount);
+    event MarketRolledOver(address indexed user, uint256 amount, uint256 newLockPeriod);
 
     function setUp() public {
         usdt = new MockUSDT();
+        otherToken = new MockUSDT();
 
         vm.startPrank(owner);
         market = new Market(
             "FR-A",
             address(usdt),
-            1_000_000
+            MAX_SUPPLY
         );
+        reward = Reward(market.rewardAddress());
+        reward.setRewardRate(THIRTY_DAYS, 400); // 4% APY
+        reward.setRewardRate(SIXTY_DAYS, 600);  // 6% APY
+        reward.setRewardRate(NINETY_DAYS, 800); // 8% APY
         vm.stopPrank();
 
-        usdt.mint(alice, 1_000_000);
-        usdt.mint(bob, 1_000_000);
+        // Mint tokens to users
+        usdt.mint(alice, INITIAL_BALANCE);
+        usdt.mint(bob, INITIAL_BALANCE);
+        usdt.mint(charlie, INITIAL_BALANCE);
+        usdt.mint(attacker, INITIAL_BALANCE);
+        usdt.mint(owner, INITIAL_BALANCE);
+        
+        // Mint other token for testing
+        otherToken.mint(alice, INITIAL_BALANCE);
     }
 
     function testDeposit() public {

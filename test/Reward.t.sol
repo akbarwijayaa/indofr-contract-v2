@@ -57,6 +57,21 @@ contract RewardTest is Test {
         assertEq(usdt.balanceOf(address(reward)), 0);
     }
 
+    function testDepositRewardWithIncorrectBalance() public {
+        vm.startPrank(alice);
+        usdt.approve(address(market), 100_000);
+        market.deposit(alice, address(usdt), 100_000, 30 days);
+        vm.stopPrank();
+
+        uint256 pendingReward = reward.pendingRewards();
+
+        vm.startPrank(owner);
+        usdt.approve(address(reward), pendingReward);
+        vm.expectRevert();
+        reward.depositReward(pendingReward);
+        vm.stopPrank();
+    }
+
     function testDepositReward() public {
         vm.startPrank(alice);
         usdt.approve(address(market), 100_000);
@@ -73,6 +88,38 @@ contract RewardTest is Test {
 
         assertEq(usdt.balanceOf(address(reward)), userReward);
         assertEq(reward.pendingRewards(), userReward);
+    }
+
+    function testRewardFlowConsistent() public {
+        vm.startPrank(alice);
+        usdt.approve(address(market), 50_000);
+        market.deposit(alice, address(usdt), 50_000, 30 days);
+        vm.stopPrank();
+
+        skip(30 days);
+
+        uint256 pendingReward = reward.calculateUserReward(50_000, 30 days);
+        uint256 rewardBalanceBefore = reward.pendingRewards();
+        
+        assertEq(rewardBalanceBefore, pendingReward);
+
+        vm.startPrank(owner);
+        usdt.mint(owner, pendingReward);
+        usdt.approve(address(reward), pendingReward);
+        reward.depositReward(pendingReward);
+        vm.stopPrank();
+
+        assertEq(reward.pendingRewards(), rewardBalanceBefore);
+        assertEq(usdt.balanceOf(address(reward)), pendingReward);
+
+        vm.startPrank(alice);
+        uint256 aliceBalanceBefore = usdt.balanceOf(alice);
+        reward.claimReward(alice, 0);
+        uint256 aliceBalanceAfter = usdt.balanceOf(alice);
+        vm.stopPrank();
+        
+        assertEq(aliceBalanceAfter, aliceBalanceBefore + pendingReward);
+        assertEq(reward.pendingRewards(), 0);
     }
 
     function testClaimReward() public {
@@ -105,6 +152,45 @@ contract RewardTest is Test {
         reward.claimReward(alice, 0);
         uint256 aliceBalanceAfter = usdt.balanceOf(alice);
         assertEq(aliceBalanceAfter, aliceBalanceBefore + aliceReward);
+    }
+
+    function testClaimRewardMultipleUsers() public {
+        vm.startPrank(alice);
+        usdt.approve(address(market), 10_000);
+        market.deposit(alice, address(usdt), 10_000, 30 days);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        usdt.approve(address(market), 20_000);
+        market.deposit(bob, address(usdt), 20_000, 30 days);
+        vm.stopPrank();
+
+        skip(30 days);
+
+        uint256 totalRewards = reward.pendingRewards();
+
+        vm.startPrank(owner);
+        usdt.mint(owner, totalRewards);
+        usdt.approve(address(reward), totalRewards);
+        reward.depositReward(totalRewards);
+        vm.stopPrank();
+
+        vm.startPrank(alice);
+        uint256 aliceReward = reward.calculateUserReward(10_000, 30 days);
+        uint256 aliceBalanceBefore = usdt.balanceOf(alice);
+
+        reward.claimReward(alice, 0);
+        uint256 aliceBalanceAfter = usdt.balanceOf(alice);
+        assertEq(aliceBalanceAfter, aliceBalanceBefore + aliceReward);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        uint256 bobReward = reward.calculateUserReward(20_000, 30 days);
+        uint256 bobBalanceBefore = usdt.balanceOf(bob);
+
+        reward.claimReward(bob, 0);
+        uint256 bobBalanceAfter = usdt.balanceOf(bob);
+        assertEq(bobBalanceAfter, bobBalanceBefore + bobReward);
     }
 
 }
