@@ -2,8 +2,10 @@
 pragma solidity ^0.8.30;
 
 import {Script, console} from "forge-std/Script.sol";
+import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+
 import {Market} from "../src/Market.sol";
-import {Reward} from "../src/Reward.sol";
 import {MockUSDT} from "../src/mocks/MockUSDT.sol";
 
 contract Deploy is Script {
@@ -29,18 +31,26 @@ contract Deploy is Script {
         MockUSDT usdt = new MockUSDT();
         console.log("MockUSDT deployed at:", address(usdt));
 
-        Market market = new Market(MARKET_NAME, address(usdt), MAX_SUPPLY);
-        console.log("Market deployed at:", address(market));
-        console.log("Market owner:", market.owner());
+        Market marketImplementation = new Market();
+        console.log("Market Implementation deployed at:", address(marketImplementation));
 
-        Reward reward = Reward(market.rewardAddress());
-        console.log("Reward contract deployed at:", address(reward));
-        console.log("Reward contract owner:", reward.owner());
+        ProxyAdmin admin = new ProxyAdmin(msg.sender);
 
-        reward.setRewardRate(ONE_MONTH, ONE_MONTH_APY);
-        reward.setRewardRate(THREE_MONTH, THREE_MONTH_APY);
-        reward.setRewardRate(SIX_MONTH, SIX_MONTH_APY);
-        reward.setRewardRate(ONE_YEAR, ONE_YEAR_APY);
+        TransparentUpgradeableProxy marketProxy = new TransparentUpgradeableProxy(
+            address(marketImplementation),
+            address(admin),
+            abi.encodeWithSelector(
+                Market.initialize.selector,
+                MARKET_NAME,
+                address(usdt),
+                MAX_SUPPLY
+            )
+        );
+
+        Market(address(marketProxy)).setRewardRate(ONE_MONTH, 400);
+        Market(address(marketProxy)).setRewardRate(THREE_MONTH, 600);
+        Market(address(marketProxy)).setRewardRate(SIX_MONTH, 800);
+        Market(address(marketProxy)).setRewardRate(ONE_YEAR, 1000);
 
         console.log("Reward rates set!");
 

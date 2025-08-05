@@ -2,28 +2,30 @@
 pragma solidity ^0.8.30;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {lockInfo} from "./types/StructType.sol";
-import {Reward} from "./Reward.sol";
+import {Initializable} from "@openzeppelin-upgradeable/contracts/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin-upgradeable/contracts/access/OwnableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin-upgradeable/contracts/utils/ReentrancyGuardUpgradeable.sol";
+import {lockInfo} from "./types/Type.sol";
 
-contract Market is Ownable, ReentrancyGuard {
+contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
+    IERC20 public tokenAccepted;
     string public marketName;
-    address public tokenAccepted;
     uint256 public tvl;
     uint256 public maxSupply;
+    uint256 public constant APY_PRECISION = 100e2;
 
-    Reward public reward;
-    address public rewardAddress;
+    mapping(uint256 => uint256) public rewardRates;
+    mapping(bytes32 => lockInfo) public positions;
+    mapping(address => bytes32[]) public userPositions;
 
-    mapping(address => lockInfo[]) public userPositions;
-    mapping(address => mapping(uint256 => uint256)) public lockStartTime;
-
-    event Deposit(address indexed to, uint256 amount);
-    event Redeem(address indexed to, uint256 amount);
+    event Deposit(address indexed receiver, bytes32 id, uint256 amount, uint256 unlockTime, uint256 reward);
+    event Redeem(address indexed to, uint256 amount, uint256 reward);
     event DepositAsOwner(uint256 amount);
     event WithdrawToOwner(address indexed from, address indexed to, uint256 amount);
     event MarketRolledOver(address indexed user, uint256 amount, uint256 newLockPeriod);
+    event DepositReward(address indexed user, uint256 amount);
+    event WithdrawReward(address indexed user, uint256 amount);
+    event RewardRateSet(uint256 lockPeriod, uint256 rateApy);
 
     error TokenNotAccepted();
     error MaxSupplyExceeded();
@@ -36,163 +38,172 @@ contract Market is Ownable, ReentrancyGuard {
     error InvalidUserPositions();
     error InvalidClaimedStatus();
     error Unauthorized();
+    error ZeroTVL();
 
 
-    constructor(string memory _marketName, address _tokenAccepted, uint256 _maxSupply) Ownable(msg.sender) {
+    function initialize(string memory _marketName, address _tokenAccepted, uint256 _maxSupply) public initializer {
         if (msg.sender == address(0)) revert ZeroAmount();
         if (bytes(_marketName).length == 0) revert ZeroAmount();
         if (_tokenAccepted == address(0)) revert ZeroAmount();
         if (_maxSupply == 0) revert InvalidMaxSupply();
 
+        __Ownable_init(msg.sender);
+        __ReentrancyGuard_init();
+
         marketName = _marketName;
-        tokenAccepted = _tokenAccepted;
+        tokenAccepted = IERC20(_tokenAccepted);
         maxSupply = _maxSupply;
 
-        reward = new Reward(_tokenAccepted, address(this), msg.sender);
-        rewardAddress = address(reward);
     }
 
 
-    function deposit(address to, address tokenIn, uint256 amount, uint256 lockPeriod) external nonReentrant {
-        if (IERC20(tokenIn).balanceOf(msg.sender) < amount) revert InsufficientBalance();
-        if (tokenIn != tokenAccepted) revert TokenNotAccepted();
+    function stake(address receiver, uint256 amount, uint256 lockPeriod) external nonReentrant returns (bytes32) {
+        if (IERC20(tokenAccepted).balanceOf(msg.sender) < amount) revert InsufficientBalance();
+        if (tokenAccepted != tokenAccepted) revert TokenNotAccepted();
         if (tvl + amount > maxSupply) revert MaxSupplyExceeded();
-        if (reward.rewardRates(lockPeriod) == 0) revert InvalidLockPeriod();
+        if (rewardRates[lockPeriod] == 0) revert InvalidLockPeriod();
 
         IERC20(tokenAccepted).transferFrom(msg.sender, address(this), amount);
 
-        (uint256 pendingReward, uint256 _lockEndTime) = reward._calculateReward(amount, lockPeriod);
+        uint256 rateApy = rewardRates[lockPeriod];
+        uint256 pendingReward = calculateReward(rateApy, amount, lockPeriod);
+        bytes32 userKey = keccak256(abi.encodePacked(receiver, amount, lockPeriod, block.timestamp));
+        userPositions[receiver].push(userKey);
 
-        uint256 positionIndex = userPositions[msg.sender].length;
-        lockStartTime[msg.sender][positionIndex] = block.timestamp;
+        uint256 _unlockTime = block.timestamp + lockPeriod;
 
-        userPositions[msg.sender].push(
-            lockInfo({
-                amount: amount,
-                lockPeriod: lockPeriod,
-                lockEndTime: _lockEndTime,
-                pendingReward: pendingReward,
-                claimedReward: 0,
-                withdrawn: false,
-                claimed: false
-            })
-        );
+        positions[userKey] = lockInfo({
+            amount: amount,
+            lockPeriod: lockPeriod,
+            unlockTime: _unlockTime,
+            reward: pendingReward
+        });
 
         tvl += amount;
 
-        emit Deposit(to, amount);
+        emit Deposit(receiver, userKey, amount, _unlockTime, pendingReward);
+
+        return userKey;
     }
 
 
-    function redeem(uint256 index) external nonReentrant {
-        lockInfo storage lock = userPositions[msg.sender][index];
+    function redeem(bytes32 id) external nonReentrant returns (uint256) {
+        lockInfo storage lock = positions[id];
 
-        if (lock.withdrawn) revert AlreadyWithdrawn();
-        if (block.timestamp < lockStartTime[msg.sender][index] + lock.lockPeriod) revert StillLockedPeriod();
+        if (block.timestamp < lock.unlockTime) revert StillLockedPeriod();
         if (lock.amount == 0) revert ZeroAmount();
+        if (tokenAccepted.balanceOf(address(this)) < lock.amount + lock.reward) revert InsufficientBalance();
 
-        lock.withdrawn = true;
-        IERC20(tokenAccepted).transfer(msg.sender, lock.amount);
+        lock.amount = 0;
         tvl -= lock.amount;
+        tokenAccepted.transfer(msg.sender, lock.amount + lock.reward);
 
-        emit Redeem(msg.sender, index);
+        emit Redeem(msg.sender, lock.amount, lock.reward);
+
+        return lock.amount + lock.reward;
     }
 
 
-    function rollover(uint256 index, uint256 newLockPeriod) external {
-        lockInfo storage lock = userPositions[msg.sender][index];
-
-        if (userPositions[msg.sender].length == 0) revert InsufficientBalance();
-        if (lock.withdrawn) revert AlreadyWithdrawn();
-        if (block.timestamp < lockStartTime[msg.sender][index] + lock.lockPeriod) revert StillLockedPeriod();
+    function rollover(bytes32 id, uint256 newLockPeriod) external nonReentrant returns (bytes32) {
+        lockInfo storage lock = positions[id];
+        if (block.timestamp < lock.unlockTime) revert StillLockedPeriod();
         if (lock.amount == 0) revert ZeroAmount();
         if (newLockPeriod <= block.timestamp) revert InvalidLockPeriod();
 
-        lock.withdrawn = true;
+        uint256 rateApy = rewardRates[newLockPeriod];
+        uint256 pendingReward = calculateReward(rateApy, lock.amount, newLockPeriod);
 
-        (uint256 pendingReward, uint256 _lockEndTime) = reward._calculateReward(lock.amount, lock.lockPeriod);
+        bytes32 userKey = keccak256(abi.encodePacked(msg.sender, lock.amount, newLockPeriod, block.timestamp));
+        userPositions[msg.sender].push(userKey);
 
-        uint256 newPositionIndex = userPositions[msg.sender].length;
-        lockStartTime[msg.sender][newPositionIndex] = block.timestamp;
-
-        userPositions[msg.sender].push(
-            lockInfo({
-                amount: lock.amount,
+        positions[userKey] = lockInfo({
+                amount: lock.amount + lock.reward,
                 lockPeriod: newLockPeriod,
-                lockEndTime: _lockEndTime,
-                pendingReward: pendingReward,
-                claimedReward: 0,
-                withdrawn: false,
-                claimed: false
-            })
-        );
+                unlockTime: block.timestamp + newLockPeriod,
+                reward: pendingReward
+            });
+        
+        lock.amount = 0;
+        lock.reward = 0;
+        tvl += lock.reward;
 
         emit MarketRolledOver(msg.sender, lock.amount, newLockPeriod);
-    }
 
-
-    function updateClaimedStatus(address user, uint256 positionIndex, uint256 claimedAmount) external onlyReward {
-        if (positionIndex >= userPositions[user].length) revert InvalidUserPositions();
-
-        lockInfo storage position = userPositions[user][positionIndex];
-        if (position.claimed) revert InvalidClaimedStatus();
-
-        position.claimed = true;
-        position.claimedReward += claimedAmount;
+        return userKey;
     }
 
 
     function depositAsOwner(uint256 amount) external onlyOwner {
         if (amount == 0) revert ZeroAmount();
+        if (tokenAccepted.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
-        IERC20(tokenAccepted).transferFrom(msg.sender, address(this), amount);
+        tokenAccepted.transferFrom(msg.sender, address(this), amount);
         emit DepositAsOwner(amount);
     }
 
 
-    function redeemToOwner(uint256 amount) external onlyOwner {
+    function withdrawToOwner(uint256 amount) external onlyOwner {
         if (amount == 0) revert ZeroAmount();
-        if (amount > IERC20(tokenAccepted).balanceOf(address(this))) revert InsufficientBalance();
+        if (amount > tokenAccepted.balanceOf(address(this))) revert InsufficientBalance();
 
-        IERC20(tokenAccepted).transfer(msg.sender, amount);
+        tokenAccepted.transfer(msg.sender, amount);
         emit WithdrawToOwner(address(this), msg.sender, amount);
+    }
+    
+
+    function addReward(uint256 amount) external onlyOwner {
+        if (amount == 0) revert ZeroAmount();
+        if (tokenAccepted.balanceOf(msg.sender) < amount) revert InsufficientBalance();
+        if (tvl == 0) revert ZeroTVL();
+
+        tokenAccepted.transferFrom(msg.sender, address(this), amount);
+
+        emit DepositReward(msg.sender, amount);
+    }
+
+    function removeReward(uint256 amount) external onlyOwner {
+        if (amount == 0) revert ZeroAmount();
+        if (tokenAccepted.balanceOf(address(this)) < amount) revert InsufficientBalance();
+
+        tokenAccepted.transfer(msg.sender, amount);
+        emit WithdrawReward(msg.sender, amount);
+    }
+
+    function setRewardRate(uint256 lockPeriod, uint256 rateApy) external onlyOwner {
+        rewardRates[lockPeriod] = rateApy;
+
+        emit RewardRateSet(lockPeriod, rateApy);
+    }
+
+    function calculateReward(uint256 apy, uint256 amount, uint256 lockPeriod) public pure returns (uint256) {
+        uint256 reward = (amount * apy * lockPeriod) / (365 days * APY_PRECISION);
+
+        return reward;
     }
 
 
     function balanceOf(address account) external view returns (uint256) {
-        uint256 total;
-        lockInfo[] storage locks = userPositions[account];
-        for (uint256 i = 0; i < locks.length; i++) {
-            if (!locks[i].withdrawn) {
-                total += locks[i].amount;
-            }
+        uint256 totalBalance = 0;
+        bytes32[] storage userKeys = userPositions[account];
+
+        for (uint256 i = 0; i < userKeys.length; i++) {
+            lockInfo storage lock = positions[userKeys[i]];
+            totalBalance += lock.amount;
         }
-        return total;
+
+        return totalBalance;
     }
 
+    function rewardOf(address account) external view returns (uint256) {
+        uint256 totalReward = 0;
+        bytes32[] storage userKeys = userPositions[account];
 
-    function userLockCount(address user) external view returns (uint256) {
-        return userPositions[user].length;
-    }
-
-
-    function getRedeemableIndexes(address user) external view returns (uint256[] memory indexes) {
-        lockInfo[] storage locks = userPositions[user];
-        uint256[] memory temp = new uint256[](locks.length);
-        uint256 count;
-        for (uint256 i = 0; i < locks.length; i++) {
-            if (!locks[i].withdrawn && block.timestamp >= lockStartTime[user][i] + locks[i].lockPeriod) {
-                temp[count++] = i;
-            }
+        for (uint256 i = 0; i < userKeys.length; i++) {
+            lockInfo storage lock = positions[userKeys[i]];
+            totalReward += lock.reward;
         }
-        indexes = new uint256[](count);
-        for (uint256 j = 0; j < count; j++) {
-            indexes[j] = temp[j];
-        }
+
+        return totalReward;
     }
 
-    modifier onlyReward() {
-        if (msg.sender != address(reward)) revert Unauthorized();
-        _;
-    }
 }
