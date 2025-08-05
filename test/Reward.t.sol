@@ -2,10 +2,9 @@
 pragma solidity ^0.8.30;
 
 import {Test, console} from "forge-std/Test.sol";
-import { Market } from "../src/Market.sol";
-import { Reward } from "../src/Reward.sol";
-import { MockUSDT } from "../src/mocks/MockUSDT.sol";
-
+import {Market} from "../src/Market.sol";
+import {Reward} from "../src/Reward.sol";
+import {MockUSDT} from "../src/mocks/MockUSDT.sol";
 
 contract RewardTest is Test {
     Market public market;
@@ -16,25 +15,26 @@ contract RewardTest is Test {
     address public alice = address(0x1);
     address public bob = address(0x2);
 
+    uint256 constant ONE_MONTH = 30 days;
+    uint256 constant THREE_MONTH = 90 days;
+    uint256 constant SIX_MONTH = 180 days;
+    uint256 constant ONE_YEAR = 365 days;
+
     function setUp() public {
         usdt = new MockUSDT();
 
         vm.startPrank(owner);
-        market = new Market(
-            "FR-A",
-            address(usdt),
-            1_000_000
-        );
+        market = new Market("FR-A", address(usdt), 1_000_000);
 
         reward = Reward(market.rewardAddress());
-        reward.setRewardRate(30 days, 400);
-        reward.setRewardRate(90 days, 600);
-        reward.setRewardRate(180 days, 800);
+        reward.setRewardRate(ONE_MONTH, 400);
+        reward.setRewardRate(THREE_MONTH, 600);
+        reward.setRewardRate(SIX_MONTH, 800);
+        reward.setRewardRate(ONE_YEAR, 1000);
         vm.stopPrank();
 
         usdt.mint(alice, 1_000_000);
         usdt.mint(bob, 1_000_000);
-
     }
 
     function testInitialOwner() public view {
@@ -42,9 +42,9 @@ contract RewardTest is Test {
         console.log("Market owner:", market.owner());
         console.log("Reward contract address:", address(reward));
         console.log("Reward contract owner:", reward.owner());
-        console.log(reward.rewardRates(30 days));
-        console.log(reward.rewardRates(90 days));
-        console.log(reward.rewardRates(180 days));
+        console.log(reward.rewardRates(ONE_MONTH));
+        console.log(reward.rewardRates(THREE_MONTH));
+        console.log(reward.rewardRates(SIX_MONTH));
     }
 
     function testInjectRewardWithNoTokensMinted() public {
@@ -60,10 +60,10 @@ contract RewardTest is Test {
     function testDepositRewardWithIncorrectBalance() public {
         vm.startPrank(alice);
         usdt.approve(address(market), 100_000);
-        market.deposit(alice, address(usdt), 100_000, 30 days);
+        market.deposit(alice, address(usdt), 100_000, ONE_MONTH);
         vm.stopPrank();
 
-        uint256 pendingReward = reward.pendingRewards();
+        uint256 pendingReward = reward.totalPromisedRewards();
 
         vm.startPrank(owner);
         usdt.approve(address(reward), pendingReward);
@@ -75,10 +75,10 @@ contract RewardTest is Test {
     function testDepositReward() public {
         vm.startPrank(alice);
         usdt.approve(address(market), 100_000);
-        market.deposit(alice, address(usdt), 100_000, 30 days);
+        market.deposit(alice, address(usdt), 100_000, ONE_MONTH);
         vm.stopPrank();
 
-        uint256 userReward = reward.pendingRewards();
+        uint256 userReward = reward.totalPromisedRewards();
 
         usdt.mint(owner, userReward);
         vm.startPrank(owner);
@@ -87,20 +87,20 @@ contract RewardTest is Test {
         vm.stopPrank();
 
         assertEq(usdt.balanceOf(address(reward)), userReward);
-        assertEq(reward.pendingRewards(), userReward);
+        assertEq(reward.totalPromisedRewards(), userReward);
     }
 
     function testRewardFlowConsistent() public {
         vm.startPrank(alice);
         usdt.approve(address(market), 50_000);
-        market.deposit(alice, address(usdt), 50_000, 30 days);
+        market.deposit(alice, address(usdt), 50_000, ONE_MONTH);
         vm.stopPrank();
 
-        skip(30 days);
+        skip(ONE_MONTH);
 
-        uint256 pendingReward = reward.calculateUserReward(50_000, 30 days);
-        uint256 rewardBalanceBefore = reward.pendingRewards();
-        
+        uint256 pendingReward = reward.calculateUserReward(50_000, ONE_MONTH);
+        uint256 rewardBalanceBefore = reward.totalPromisedRewards();
+
         assertEq(rewardBalanceBefore, pendingReward);
 
         vm.startPrank(owner);
@@ -109,7 +109,7 @@ contract RewardTest is Test {
         reward.depositReward(pendingReward);
         vm.stopPrank();
 
-        assertEq(reward.pendingRewards(), rewardBalanceBefore);
+        assertEq(reward.totalPromisedRewards(), rewardBalanceBefore);
         assertEq(usdt.balanceOf(address(reward)), pendingReward);
 
         vm.startPrank(alice);
@@ -117,25 +117,25 @@ contract RewardTest is Test {
         reward.claimReward(alice, 0);
         uint256 aliceBalanceAfter = usdt.balanceOf(alice);
         vm.stopPrank();
-        
+
         assertEq(aliceBalanceAfter, aliceBalanceBefore + pendingReward);
-        assertEq(reward.pendingRewards(), 0);
+        assertEq(reward.totalPromisedRewards(), 0);
     }
 
     function testClaimReward() public {
         vm.startPrank(alice);
         usdt.approve(address(market), 10_000);
-        market.deposit(alice, address(usdt), 10_000, 30 days);
+        market.deposit(alice, address(usdt), 10_000, ONE_MONTH);
         vm.stopPrank();
 
         vm.startPrank(bob);
         usdt.approve(address(market), 10_000);
-        market.deposit(bob, address(usdt), 10_000, 30 days);
+        market.deposit(bob, address(usdt), 10_000, ONE_MONTH);
         vm.stopPrank();
 
-        skip(30 days);
+        skip(ONE_MONTH);
 
-        uint256 userReward = reward.pendingRewards();
+        uint256 userReward = reward.totalPromisedRewards();
 
         vm.startPrank(owner);
         usdt.mint(owner, userReward);
@@ -143,10 +143,10 @@ contract RewardTest is Test {
         reward.depositReward(userReward);
         vm.stopPrank();
         assertEq(usdt.balanceOf(address(reward)), userReward);
-        assertEq(reward.pendingRewards(), userReward);
+        assertEq(reward.totalPromisedRewards(), userReward);
 
         vm.startPrank(alice);
-        uint256 aliceReward = reward.calculateUserReward(10_000, 30 days);
+        uint256 aliceReward = reward.calculateUserReward(10_000, ONE_MONTH);
         uint256 aliceBalanceBefore = usdt.balanceOf(alice);
 
         reward.claimReward(alice, 0);
@@ -157,17 +157,17 @@ contract RewardTest is Test {
     function testClaimRewardMultipleUsers() public {
         vm.startPrank(alice);
         usdt.approve(address(market), 10_000);
-        market.deposit(alice, address(usdt), 10_000, 30 days);
+        market.deposit(alice, address(usdt), 10_000, ONE_MONTH);
         vm.stopPrank();
 
         vm.startPrank(bob);
         usdt.approve(address(market), 20_000);
-        market.deposit(bob, address(usdt), 20_000, 30 days);
+        market.deposit(bob, address(usdt), 20_000, ONE_MONTH);
         vm.stopPrank();
 
-        skip(30 days);
+        skip(ONE_MONTH);
 
-        uint256 totalRewards = reward.pendingRewards();
+        uint256 totalRewards = reward.totalPromisedRewards();
 
         vm.startPrank(owner);
         usdt.mint(owner, totalRewards);
@@ -176,7 +176,7 @@ contract RewardTest is Test {
         vm.stopPrank();
 
         vm.startPrank(alice);
-        uint256 aliceReward = reward.calculateUserReward(10_000, 30 days);
+        uint256 aliceReward = reward.calculateUserReward(10_000, ONE_MONTH);
         uint256 aliceBalanceBefore = usdt.balanceOf(alice);
 
         reward.claimReward(alice, 0);
@@ -185,12 +185,11 @@ contract RewardTest is Test {
         vm.stopPrank();
 
         vm.startPrank(bob);
-        uint256 bobReward = reward.calculateUserReward(20_000, 30 days);
+        uint256 bobReward = reward.calculateUserReward(20_000, ONE_MONTH);
         uint256 bobBalanceBefore = usdt.balanceOf(bob);
 
         reward.claimReward(bob, 0);
         uint256 bobBalanceAfter = usdt.balanceOf(bob);
         assertEq(bobBalanceAfter, bobBalanceBefore + bobReward);
     }
-
 }
