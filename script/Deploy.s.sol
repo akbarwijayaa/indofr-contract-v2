@@ -9,7 +9,6 @@ import {Market} from "../src/Market.sol";
 import {MockUSDT} from "../src/mocks/MockUSDT.sol";
 
 contract Deploy is Script {
-
     string MARKET_NAME = "FR-A";
     uint256 constant MAX_SUPPLY = 1_000_000;
 
@@ -22,7 +21,6 @@ contract Deploy is Script {
     uint256 constant THREE_MONTH_APY = 600;
     uint256 constant SIX_MONTH_APY = 800;
     uint256 constant ONE_YEAR_APY = 1000;
-
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -39,12 +37,7 @@ contract Deploy is Script {
         TransparentUpgradeableProxy marketProxy = new TransparentUpgradeableProxy(
             address(marketImplementation),
             address(admin),
-            abi.encodeWithSelector(
-                Market.initialize.selector,
-                MARKET_NAME,
-                address(usdt),
-                MAX_SUPPLY
-            )
+            abi.encodeWithSelector(Market.initialize.selector, MARKET_NAME, address(usdt), MAX_SUPPLY)
         );
 
         Market(address(marketProxy)).setRewardRate(ONE_MONTH, 400);

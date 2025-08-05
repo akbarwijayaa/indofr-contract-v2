@@ -51,12 +51,7 @@ contract MarketTest is Test {
         marketProxy = new TransparentUpgradeableProxy(
             address(marketImplementation),
             address(admin),
-            abi.encodeWithSelector(
-                Market.initialize.selector,
-                "FR-A",
-                address(usdt),
-                MAX_SUPPLY
-            )
+            abi.encodeWithSelector(Market.initialize.selector, "FR-A", address(usdt), MAX_SUPPLY)
         );
 
         Market(address(marketProxy)).setRewardRate(ONE_MONTH, ONE_MONTH_APY);
@@ -97,7 +92,7 @@ contract MarketTest is Test {
         vm.startPrank(alice);
         usdt.approve(address(marketProxy), 100);
         bytes32 id = Market(address(marketProxy)).stake(alice, 100, ONE_MONTH);
-        
+
         skip(ONE_MONTH);
         uint256 initialBalance = usdt.balanceOf(alice);
 
@@ -105,7 +100,6 @@ contract MarketTest is Test {
 
         assertEq(claimedAmount + initialBalance, usdt.balanceOf(alice));
         assertEq(Market(address(marketProxy)).balanceOf(alice), 0);
-        
     }
 
     function testMaxSupplyExceeded() public {
@@ -144,7 +138,7 @@ contract MarketTest is Test {
         vm.startPrank(alice);
         usdt.approve(address(marketProxy), 100);
         bytes32 id = Market(address(marketProxy)).stake(alice, 100, ONE_MONTH);
-        (uint256 amountDeposited, , , uint256 rewardDeposited) = Market(address(marketProxy)).positions(id);
+        (uint256 amountDeposited,,, uint256 rewardDeposited) = Market(address(marketProxy)).positions(id);
         assertEq(Market(address(marketProxy)).balanceOf(alice), 100);
 
         skip(ONE_MONTH);
@@ -152,7 +146,8 @@ contract MarketTest is Test {
         bytes32 idRollover = Market(address(marketProxy)).rollover(id, THREE_MONTH);
         assertEq(Market(address(marketProxy)).balanceOf(alice), amountDeposited + rewardDeposited);
 
-        (uint256 amount, uint256 lockPeriod, uint256 unlockTime, uint256 reward) = Market(address(marketProxy)).positions(idRollover);
+        (uint256 amount, uint256 lockPeriod, uint256 unlockTime, uint256 reward) =
+            Market(address(marketProxy)).positions(idRollover);
 
         assertEq(amount, amountDeposited + rewardDeposited);
         assertEq(lockPeriod, THREE_MONTH);

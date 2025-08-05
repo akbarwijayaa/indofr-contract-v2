@@ -40,7 +40,6 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
     error Unauthorized();
     error ZeroTVL();
 
-
     function initialize(string memory _marketName, address _tokenAccepted, uint256 _maxSupply) public initializer {
         if (msg.sender == address(0)) revert ZeroAmount();
         if (bytes(_marketName).length == 0) revert ZeroAmount();
@@ -53,9 +52,7 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
         marketName = _marketName;
         tokenAccepted = IERC20(_tokenAccepted);
         maxSupply = _maxSupply;
-
     }
-
 
     function stake(address receiver, uint256 amount, uint256 lockPeriod) external nonReentrant returns (bytes32) {
         if (IERC20(tokenAccepted).balanceOf(msg.sender) < amount) revert InsufficientBalance();
@@ -72,12 +69,8 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
 
         uint256 _unlockTime = block.timestamp + lockPeriod;
 
-        positions[userKey] = lockInfo({
-            amount: amount,
-            lockPeriod: lockPeriod,
-            unlockTime: _unlockTime,
-            reward: pendingReward
-        });
+        positions[userKey] =
+            lockInfo({amount: amount, lockPeriod: lockPeriod, unlockTime: _unlockTime, reward: pendingReward});
 
         tvl += amount;
 
@@ -85,7 +78,6 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
 
         return userKey;
     }
-
 
     function redeem(bytes32 id) external nonReentrant returns (uint256) {
         lockInfo storage lock = positions[id];
@@ -103,7 +95,6 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
         return lock.amount + lock.reward;
     }
 
-
     function rollover(bytes32 id, uint256 newLockPeriod) external nonReentrant returns (bytes32) {
         lockInfo storage lock = positions[id];
         if (block.timestamp < lock.unlockTime) revert StillLockedPeriod();
@@ -117,12 +108,12 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
         userPositions[msg.sender].push(userKey);
 
         positions[userKey] = lockInfo({
-                amount: lock.amount + lock.reward,
-                lockPeriod: newLockPeriod,
-                unlockTime: block.timestamp + newLockPeriod,
-                reward: pendingReward
-            });
-        
+            amount: lock.amount + lock.reward,
+            lockPeriod: newLockPeriod,
+            unlockTime: block.timestamp + newLockPeriod,
+            reward: pendingReward
+        });
+
         lock.amount = 0;
         lock.reward = 0;
         tvl += lock.reward;
@@ -132,7 +123,6 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
         return userKey;
     }
 
-
     function depositAsOwner(uint256 amount) external onlyOwner {
         if (amount == 0) revert ZeroAmount();
         if (tokenAccepted.balanceOf(msg.sender) < amount) revert InsufficientBalance();
@@ -141,7 +131,6 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
         emit DepositAsOwner(amount);
     }
 
-
     function withdrawToOwner(uint256 amount) external onlyOwner {
         if (amount == 0) revert ZeroAmount();
         if (amount > tokenAccepted.balanceOf(address(this))) revert InsufficientBalance();
@@ -149,7 +138,6 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
         tokenAccepted.transfer(msg.sender, amount);
         emit WithdrawToOwner(address(this), msg.sender, amount);
     }
-    
 
     function addReward(uint256 amount) external onlyOwner {
         if (amount == 0) revert ZeroAmount();
@@ -181,7 +169,6 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
         return reward;
     }
 
-
     function balanceOf(address account) external view returns (uint256) {
         uint256 totalBalance = 0;
         bytes32[] storage userKeys = userPositions[account];
@@ -205,5 +192,4 @@ contract Market is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable
 
         return totalReward;
     }
-
 }

@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {Test, console} from "forge-std/Test.sol";
 import {Deploy} from "../script/Deploy.s.sol";
 
-
 contract DeployTest is Test {
     Deploy public deploy;
 
@@ -16,5 +15,4 @@ contract DeployTest is Test {
         deploy.run();
         console.log("Deployment script executed successfully.");
     }
-
 }
