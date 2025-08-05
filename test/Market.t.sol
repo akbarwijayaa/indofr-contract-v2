@@ -134,6 +134,17 @@ contract MarketTest is Test {
         assertEq(Market(address(marketProxy)).balanceOf(alice), 0);
     }
 
+    function testRedeemWithNonOwner() public {
+        vm.startPrank(alice);
+        usdt.approve(address(marketProxy), 100);
+        bytes32 id = Market(address(marketProxy)).stake(alice, 100, ONE_MONTH);
+
+        vm.stopPrank();
+        vm.startPrank(bob);
+        vm.expectRevert();
+        Market(address(marketProxy)).redeem(id);
+    }
+
     function testRollover() public {
         vm.startPrank(alice);
         usdt.approve(address(marketProxy), 100);
