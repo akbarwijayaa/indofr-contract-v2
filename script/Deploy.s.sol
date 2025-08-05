@@ -31,9 +31,11 @@ contract Deploy is Script {
 
         Market market = new Market(MARKET_NAME, address(usdt), MAX_SUPPLY);
         console.log("Market deployed at:", address(market));
+        console.log("Market owner:", market.owner());
 
-        Reward reward = new Reward(address(usdt), address(market), address(this));
-        console.log("Reward contract address:", address(reward));
+        Reward reward = Reward(market.rewardAddress());
+        console.log("Reward contract deployed at:", address(reward));
+        console.log("Reward contract owner:", reward.owner());
 
         reward.setRewardRate(ONE_MONTH, ONE_MONTH_APY);
         reward.setRewardRate(THREE_MONTH, THREE_MONTH_APY);
