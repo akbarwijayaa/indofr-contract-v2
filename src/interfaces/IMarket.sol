@@ -6,8 +6,19 @@ interface IMarket {
     function tokenAccepted() external view returns (address);
     function tvl() external view returns (uint256);
     function maxSupply() external view returns (uint256);
-    function getPendingReward(uint index) external view returns (uint256);
-    function userPositions(address user, uint256 index) external view returns (uint256 amount, uint256 lockPeriod, uint256 pendingReward, uint256 claimedReward, bool withdrawn, bool claimed);
+    function getPendingReward(uint256 index) external view returns (uint256);
+    function userPositions(address user, uint256 index)
+        external
+        view
+        returns (
+            uint256 amount,
+            uint256 lockPeriod,
+            uint256 lockEndTime,
+            uint256 pendingReward,
+            uint256 claimedReward,
+            bool withdrawn,
+            bool claimed
+        );
 
     function deposit(address to, address tokenIn, uint256 amount, uint256 lockPeriod) external;
     function redeem(uint256 index) external;

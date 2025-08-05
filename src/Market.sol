@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-import { lockInfo } from "./types/StructType.sol";
-import { Reward } from "./Reward.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {lockInfo} from "./types/StructType.sol";
+import {Reward} from "./Reward.sol";
 
-contract Market is Ownable {
+contract Market is Ownable, ReentrancyGuard {
     string public marketName;
     address public tokenAccepted;
     uint256 public tvl;
@@ -18,7 +19,6 @@ contract Market is Ownable {
     mapping(address => lockInfo[]) public userPositions;
     mapping(address => mapping(uint256 => uint256)) public lockStartTime;
 
-
     event Deposit(address indexed to, uint256 amount);
     event Redeem(address indexed to, uint256 amount);
     event DepositAsOwner(uint256 amount);
@@ -28,21 +28,17 @@ contract Market is Ownable {
     error TokenNotAccepted();
     error MaxSupplyExceeded();
     error InvalidMaxSupply();
+    error InvalidLockPeriod();
     error InsufficientBalance();
     error StillLockedPeriod();
     error ZeroAmount();
     error AlreadyWithdrawn();
-    error InvalidMarketAddress();
-    error InvalidAmount();
-    error MarketNotMatured();
+    error InvalidUserPositions();
     error InvalidClaimedStatus();
     error Unauthorized();
 
-    constructor (
-        string memory _marketName,
-        address _tokenAccepted,
-        uint256 _maxSupply
-    ) Ownable(msg.sender) {
+
+    constructor(string memory _marketName, address _tokenAccepted, uint256 _maxSupply) Ownable(msg.sender) {
         if (msg.sender == address(0)) revert ZeroAmount();
         if (bytes(_marketName).length == 0) revert ZeroAmount();
         if (_tokenAccepted == address(0)) revert ZeroAmount();
@@ -56,26 +52,31 @@ contract Market is Ownable {
         rewardAddress = address(reward);
     }
 
-    function deposit(address to, address tokenIn, uint256 amount, uint256 lockPeriod) external {
+
+    function deposit(address to, address tokenIn, uint256 amount, uint256 lockPeriod) external nonReentrant {
         if (IERC20(tokenIn).balanceOf(msg.sender) < amount) revert InsufficientBalance();
         if (tokenIn != tokenAccepted) revert TokenNotAccepted();
         if (tvl + amount > maxSupply) revert MaxSupplyExceeded();
+        if (reward.rewardRates(lockPeriod) == 0) revert InvalidLockPeriod();
 
         IERC20(tokenAccepted).transferFrom(msg.sender, address(this), amount);
 
-        uint256 pendingReward = reward._calculateReward(amount, lockPeriod);
+        (uint256 pendingReward, uint256 _lockEndTime) = reward._calculateReward(amount, lockPeriod);
 
         uint256 positionIndex = userPositions[msg.sender].length;
         lockStartTime[msg.sender][positionIndex] = block.timestamp;
-        
-        userPositions[msg.sender].push(lockInfo({
-            amount: amount,
-            lockPeriod: lockPeriod,
-            pendingReward: pendingReward,
-            claimedReward: 0,
-            withdrawn: false,
-            claimed: false
-        }));
+
+        userPositions[msg.sender].push(
+            lockInfo({
+                amount: amount,
+                lockPeriod: lockPeriod,
+                lockEndTime: _lockEndTime,
+                pendingReward: pendingReward,
+                claimedReward: 0,
+                withdrawn: false,
+                claimed: false
+            })
+        );
 
         tvl += amount;
 
@@ -83,7 +84,7 @@ contract Market is Ownable {
     }
 
 
-    function redeem(uint index) external {
+    function redeem(uint256 index) external nonReentrant {
         lockInfo storage lock = userPositions[msg.sender][index];
 
         if (lock.withdrawn) revert AlreadyWithdrawn();
@@ -98,13 +99,56 @@ contract Market is Ownable {
     }
 
 
+    function rollover(uint256 index, uint256 newLockPeriod) external {
+        lockInfo storage lock = userPositions[msg.sender][index];
+
+        if (userPositions[msg.sender].length == 0) revert InsufficientBalance();
+        if (lock.withdrawn) revert AlreadyWithdrawn();
+        if (block.timestamp < lockStartTime[msg.sender][index] + lock.lockPeriod) revert StillLockedPeriod();
+        if (lock.amount == 0) revert ZeroAmount();
+        if (newLockPeriod <= block.timestamp) revert InvalidLockPeriod();
+
+        lock.withdrawn = true;
+
+        (uint256 pendingReward, uint256 _lockEndTime) = reward._calculateReward(lock.amount, lock.lockPeriod);
+
+        uint256 newPositionIndex = userPositions[msg.sender].length;
+        lockStartTime[msg.sender][newPositionIndex] = block.timestamp;
+
+        userPositions[msg.sender].push(
+            lockInfo({
+                amount: lock.amount,
+                lockPeriod: newLockPeriod,
+                lockEndTime: _lockEndTime,
+                pendingReward: pendingReward,
+                claimedReward: 0,
+                withdrawn: false,
+                claimed: false
+            })
+        );
+
+        emit MarketRolledOver(msg.sender, lock.amount, newLockPeriod);
+    }
+
+
+    function updateClaimedStatus(address user, uint256 positionIndex, uint256 claimedAmount) external onlyReward {
+        if (positionIndex >= userPositions[user].length) revert InvalidUserPositions();
+
+        lockInfo storage position = userPositions[user][positionIndex];
+        if (position.claimed) revert InvalidClaimedStatus();
+
+        position.claimed = true;
+        position.claimedReward += claimedAmount;
+    }
+
+
     function depositAsOwner(uint256 amount) external onlyOwner {
         if (amount == 0) revert ZeroAmount();
 
         IERC20(tokenAccepted).transferFrom(msg.sender, address(this), amount);
         emit DepositAsOwner(amount);
     }
-    
+
 
     function redeemToOwner(uint256 amount) external onlyOwner {
         if (amount == 0) revert ZeroAmount();
@@ -113,6 +157,7 @@ contract Market is Ownable {
         IERC20(tokenAccepted).transfer(msg.sender, amount);
         emit WithdrawToOwner(address(this), msg.sender, amount);
     }
+
 
     function balanceOf(address account) external view returns (uint256) {
         uint256 total;
@@ -131,62 +176,23 @@ contract Market is Ownable {
     }
 
 
-    function getRedeemableIndexes(address user) external view returns (uint256[] memory) {
+    function getRedeemableIndexes(address user) external view returns (uint256[] memory indexes) {
         lockInfo[] storage locks = userPositions[user];
+        uint256[] memory temp = new uint256[](locks.length);
         uint256 count;
         for (uint256 i = 0; i < locks.length; i++) {
-            if (!locks[i].withdrawn && block.timestamp >= lockStartTime[user][i] + locks[i].lockPeriod && locks[i].amount > 0) {
-                count++;
+            if (!locks[i].withdrawn && block.timestamp >= lockStartTime[user][i] + locks[i].lockPeriod) {
+                temp[count++] = i;
             }
         }
-        uint256[] memory indexes = new uint256[](count);
-        uint256 j;
-        for (uint256 i = 0; i < locks.length; i++) {
-            if (!locks[i].withdrawn && block.timestamp >= lockStartTime[user][i] + locks[i].lockPeriod && locks[i].amount > 0) {
-                indexes[j] = i;
-                j++;
-            }
+        indexes = new uint256[](count);
+        for (uint256 j = 0; j < count; j++) {
+            indexes[j] = temp[j];
         }
-        return indexes;
     }
 
-
-    function rollover(uint index, uint newLockPeriod) external {
-        lockInfo storage lock = userPositions[msg.sender][index];
-        
-        if (userPositions[msg.sender].length == 0) revert InsufficientBalance();
-        if (lock.withdrawn) revert AlreadyWithdrawn();
-        if (block.timestamp < lockStartTime[msg.sender][index] + lock.lockPeriod) revert StillLockedPeriod();
-        if (lock.amount == 0) revert ZeroAmount();
-        if (newLockPeriod <= block.timestamp) revert InvalidAmount();
-
-        lock.withdrawn = true;
-        
-        uint256 newPositionIndex = userPositions[msg.sender].length;
-        lockStartTime[msg.sender][newPositionIndex] = block.timestamp;
-        
-        userPositions[msg.sender].push(lockInfo({
-            amount: lock.amount,
-            lockPeriod: newLockPeriod,
-            pendingReward: reward._calculateReward(lock.amount, newLockPeriod),
-            claimedReward: 0,
-            withdrawn: false,
-            claimed: false
-        }));
-
-
-        emit MarketRolledOver(msg.sender, lock.amount, newLockPeriod);
+    modifier onlyReward() {
+        if (msg.sender != address(reward)) revert Unauthorized();
+        _;
     }
-
-    function updateClaimedStatus(address user, uint256 positionIndex, uint256 claimedAmount) external {
-        if (msg.sender != rewardAddress) revert Unauthorized();
-        if (positionIndex >= userPositions[user].length) revert InvalidAmount();
-        
-        lockInfo storage position = userPositions[user][positionIndex];
-        if (position.claimed) revert InvalidClaimedStatus();
-        
-        position.claimed = true;
-        position.claimedReward += claimedAmount;
-    }
-
 }
